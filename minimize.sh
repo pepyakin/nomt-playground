@@ -15,7 +15,6 @@ while true; do
 
     status=$?
     if [ $status -ne 0 ]; then
-        say done;
         echo "❌ Failed at N=$N (exit code $status)"
         exit 1
     fi

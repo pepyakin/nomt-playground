@@ -2,7 +2,7 @@
 
 # Script for finding a minimum repro.
 
-N=1
+N=$(( RANDOM ))
 while true; do
     echo "Testing N=$N"
     RUST_BACKTRACE=1 RUST_LOG=info \

@@ -1,8 +1,8 @@
 use nomt::hasher::BinaryHasher;
 use nomt::trie::KeyPath;
 use nomt::{KeyReadWrite, Nomt, Options, Overlay, SessionParams, WitnessMode};
-use rand::Rng;
-use sha2::{Digest, digest};
+use rand::{rngs::StdRng, Rng, SeedableRng};
+use sha2::{digest, Digest};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use tempfile::TempDir;
@@ -159,6 +159,7 @@ pub struct RollupNode {
     _storage_receiver: tokio::sync::watch::Receiver<NomtSessionBuilder<sha2::Sha256>>,
     data_receiver: std::sync::mpsc::Receiver<Vec<(KeyPath, KeyReadWrite)>>,
     finalization_probability: u8,
+    rng: StdRng,
 }
 
 impl RollupNode {
@@ -167,11 +168,13 @@ impl RollupNode {
         fast_sequencers: usize,
         sleepy_sequencers: usize,
         finalization_probability: u8,
+        seed: u64,
     ) -> Self {
         let mut storage_manager = StorageManager::new(temp_in);
         let (init_key, init_storage) = storage_manager.crate_next_storage();
         let (storage_sender, storage_receiver) = tokio::sync::watch::channel(init_storage.clone());
         let (data_sender, data_receiver) = std::sync::mpsc::channel();
+        let mut rng_seed = seed;
 
         {
             let genesis_session = init_storage
@@ -186,10 +189,24 @@ impl RollupNode {
         }
 
         for _ in 0..fast_sequencers {
-            SequencerTask::spawn(storage_receiver.clone(), data_sender.clone(), false);
+            let sequencer_rng = StdRng::seed_from_u64(rng_seed);
+            rng_seed += 1;
+            SequencerTask::spawn(
+                storage_receiver.clone(),
+                data_sender.clone(),
+                false,
+                sequencer_rng,
+            );
         }
         for _ in 0..sleepy_sequencers {
-            SequencerTask::spawn(storage_receiver.clone(), data_sender.clone(), true);
+            let sequencer_rng = StdRng::seed_from_u64(rng_seed);
+            rng_seed += 1;
+            SequencerTask::spawn(
+                storage_receiver.clone(),
+                data_sender.clone(),
+                true,
+                sequencer_rng,
+            );
         }
 
         Self {
@@ -198,6 +215,7 @@ impl RollupNode {
             _storage_receiver: storage_receiver,
             data_receiver,
             finalization_probability,
+            rng: StdRng::seed_from_u64(rng_seed),
         }
     }
 
@@ -206,7 +224,6 @@ impl RollupNode {
     ///  - Extend reads/writes with different keys (existing, etc)
     ///     - Currently it tries to read some random key, but probability is low.
     pub fn run(mut self, blocks: usize) {
-        let mut rng = rand::rng();
         for block_number in 0..blocks {
             tracing::info!(block_number, "Processing block");
 
@@ -235,7 +252,7 @@ impl RollupNode {
                 .storage_manager
                 .create_storage_for_existing_key(key + 1);
             self.storage_sender.send(new_storage).unwrap();
-            let n = rng.random_range(0u8..=100);
+            let n = self.rng.random_range(0u8..=100);
             if n > self.finalization_probability {
                 for k in self.storage_manager.last_commited_key + 1..=key {
                     self.storage_manager.finalize(k);
@@ -248,9 +265,12 @@ impl RollupNode {
     }
 }
 
-fn generate_random_writes(new: usize, probably_existing: usize) -> Vec<(KeyPath, Vec<u8>)> {
+fn generate_random_writes(
+    rng: &mut impl Rng,
+    new: usize,
+    probably_existing: usize,
+) -> Vec<(KeyPath, Vec<u8>)> {
     let mut result = Vec::with_capacity(new);
-    let mut rng = rand::rng();
 
     for _ in 0..new {
         let key: [u8; 32] = rng.random();
@@ -276,6 +296,7 @@ pub struct SequencerTask {
     storage_receiver: tokio::sync::watch::Receiver<NomtSessionBuilder<sha2::Sha256>>,
     data_sender: std::sync::mpsc::Sender<Vec<(KeyPath, KeyReadWrite)>>,
     with_strategic_sleeps: bool,
+    rng: StdRng,
 }
 
 impl SequencerTask {
@@ -283,11 +304,13 @@ impl SequencerTask {
         storage_receiver: tokio::sync::watch::Receiver<NomtSessionBuilder<sha2::Sha256>>,
         data_sender: std::sync::mpsc::Sender<Vec<(KeyPath, KeyReadWrite)>>,
         with_strategic_sleeps: bool,
+        rng: StdRng,
     ) {
         let task = Self {
             storage_receiver,
             data_sender,
             with_strategic_sleeps,
+            rng,
         };
 
         std::thread::spawn(move || {
@@ -295,25 +318,24 @@ impl SequencerTask {
         });
     }
 
-    fn run(self) {
+    fn run(mut self) {
         let seq_type = if self.with_strategic_sleeps {
             "sleepy"
         } else {
             "fast"
         };
         let _span = tracing::info_span!("seq-loop", seq_type = seq_type).entered();
-        use rand::Rng;
 
         loop {
             if self.with_strategic_sleeps {
-                let sleep_duration_1 = rand::rng().random_range(0..=30);
+                let sleep_duration_1 = self.rng.random_range(0..=30);
                 std::thread::sleep(std::time::Duration::from_millis(sleep_duration_1));
             }
 
             // Generate random keys
-            let num_writes = rand::rng().random_range(1..=2000);
-            let num_reads = rand::rng().random_range(1..=100);
-            let raw_generated_data = generate_random_writes(num_writes, num_reads);
+            let num_writes = self.rng.random_range(1..=2000);
+            let num_reads = self.rng.random_range(1..=100);
+            let raw_generated_data = generate_random_writes(&mut self.rng, num_writes, num_reads);
 
             // Get current storage from the receiver
             let storage = self.storage_receiver.borrow().clone();
@@ -330,10 +352,12 @@ impl SequencerTask {
             let mut data = Vec::with_capacity(raw_generated_data.len());
 
             for (key, raw_value) in raw_generated_data {
-                if rand::rng().random_bool(0.3) {
+                let do_read = self.rng.random_bool(0.3);
+                if do_read {
                     // In real sovereign rollup we never actually read from NOMT (all data is rocksdb)
                     let existing_data = session.read(key).unwrap();
-                    if rand::rng().random_bool(0.1) {
+                    let do_delete = self.rng.random_bool(0.1);
+                    if do_delete {
                         // Deletion
                         data.push((key, KeyReadWrite::ReadThenWrite(existing_data, None)));
                     } else {
@@ -350,7 +374,7 @@ impl SequencerTask {
             data.sort_by(|k1, k2| k1.0.cmp(&k2.0));
 
             if self.with_strategic_sleeps {
-                let sleep_duration_2 = rand::rng().random_range(0..=200);
+                let sleep_duration_2 = self.rng.random_range(0..=200);
                 std::thread::sleep(std::time::Duration::from_millis(sleep_duration_2));
             }
 

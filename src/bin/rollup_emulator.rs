@@ -22,6 +22,9 @@ struct Args {
     /// Probability of finalization (0-100)
     #[arg(long, default_value = "80")]
     finalization_probability: u8,
+    /// Seed for deterministic RNG
+    #[arg(long, default_value = "0")]
+    seed: u64,
 }
 
 #[tokio::main]
@@ -43,6 +46,7 @@ async fn main() {
         args.fast_sequencers,
         args.sleepy_sequencers,
         args.finalization_probability,
+        args.seed,
     );
     node.run(args.number_of_blocks);
     tracing::info!("Rollup emulator finished");

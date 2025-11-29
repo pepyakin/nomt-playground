@@ -7,7 +7,7 @@ while true; do
     echo "Testing N=$N"
     RUST_BACKTRACE=1 RUST_LOG=info \
         ./target/release/rollup_emulator \
-        --number-of-blocks=20 \
+        --number-of-blocks=10 \
         --fast-sequencers=1 \
         --sleepy-sequencers=0 \
         --storage-path=/tmp \

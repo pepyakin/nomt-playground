@@ -11,7 +11,7 @@ while true; do
         --fast-sequencers=1 \
         --sleepy-sequencers=0 \
         --storage-path=/tmp \
-        --seed "$N"
+        --seed $N
 
     status=$?
     if [ $status -ne 0 ]; then

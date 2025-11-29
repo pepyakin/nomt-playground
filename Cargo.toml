@@ -22,3 +22,9 @@ name = "rollup_emulator"
 path = "src/bin/rollup_emulator.rs"
 
 [dev-dependencies]
+
+[profile.release]
+debug = 1
+
+# [patch.crates-io]
+# nomt = { path = "../nomt/nomt" }

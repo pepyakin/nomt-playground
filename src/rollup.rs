@@ -1,8 +1,8 @@
 use nomt::hasher::BinaryHasher;
 use nomt::trie::KeyPath;
 use nomt::{KeyReadWrite, Nomt, Options, Overlay, SessionParams, WitnessMode};
-use rand::{rngs::StdRng, Rng, SeedableRng};
-use sha2::{digest, Digest};
+use rand::{Rng, SeedableRng, rngs::StdRng};
+use sha2::{Digest, digest};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use tempfile::TempDir;
@@ -87,7 +87,7 @@ where
         // Enable rollback, so we can handle errors with commits to 2 databases.
         opts.rollback(true);
         opts.max_rollback_log_len(1);
-        opts.commit_concurrency(6);
+        opts.commit_concurrency(1);
         opts.hashtable_buckets(1_000_000);
         opts.preallocate_ht(false);
         opts.path(dir.path().join("kernel_nomt_db"));
